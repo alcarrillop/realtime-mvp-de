@@ -1,0 +1,29 @@
+version: "3.8"
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: >
+      redpanda start --overprovisioned --smp 1 --memory 1G
+      --reserve-memory 0M --node-id 0 --check=false
+      --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr redpanda:9092,localhost:9092
+    ports: ["9092:9092"]
+
+  jobmanager:
+    image: flink:1.17-scala_2.12-java11
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+    ports: ["8081:8081"]
+    depends_on: [redpanda]
+
+  taskmanager:
+    image: flink:1.17-scala_2.12-java11
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    depends_on: [jobmanager]

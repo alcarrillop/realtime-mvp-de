@@ -1,0 +1,9 @@
+pyproject.toml
+src/realtime_mvp.egg-info/PKG-INFO
+src/realtime_mvp.egg-info/SOURCES.txt
+src/realtime_mvp.egg-info/dependency_links.txt
+src/realtime_mvp.egg-info/requires.txt
+src/realtime_mvp.egg-info/top_level.txt
+src/realtime_mvp/dashboard/app.py
+src/realtime_mvp/flink/flink_job.py
+src/realtime_mvp/producer/producer.py

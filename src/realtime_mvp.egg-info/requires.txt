@@ -1,0 +1,6 @@
+kafka-python
+pandas>=2.0.0
+faker
+numpy>=1.24.0
+apache-flink>=2.1.0
+streamlit

@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: realtime-mvp
+Version: 0.1.0
+Summary: Real-time log analytics MVP with Kafka, Flink, and Streamlit
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: kafka-python
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: faker
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: apache-flink>=2.1.0
+Requires-Dist: streamlit
