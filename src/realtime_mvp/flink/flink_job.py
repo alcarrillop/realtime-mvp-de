@@ -1,174 +1,190 @@
-import json
 import os
-from typing import Optional
+import json
+import time
+import requests
+from kafka import KafkaProducer, KafkaConsumer
+import threading
 
-# Check if we're in a development environment without proper Java setup
-try:
-    import subprocess
-    result = subprocess.run(['java', '-version'], capture_output=True, text=True)
-    java_version_line = result.stderr.split('\n')[0]
-    if 'version "1.8' in java_version_line:
-        USE_MOCK = True
-    else:
-        USE_MOCK = False
-except:
-    USE_MOCK = True
-
-if USE_MOCK:
-    print("Warning: Java 11+ required for PyFlink. Using mock implementation for development.")
+class FlinkJobSubmitter:
+    """Submit Flink job via REST API"""
     
-    class MockStreamExecutionEnvironment:
-        def __init__(self):
-            self.parallelism = 1
-            
-        @staticmethod
-        def get_execution_environment():
-            return MockStreamExecutionEnvironment()
-            
-        def set_parallelism(self, parallelism):
-            self.parallelism = parallelism
-            
-        def add_source(self, source):
-            return MockDataStream()
-            
-        def execute(self, job_name):
-            print(f"Mock Flink job '{job_name}' executed successfully!")
-            
-    class MockDataStream:
-        def map(self, func):
-            return self
-            
-        def key_by(self, func):
-            return self
-            
-        def window(self, window):
-            return MockWindowedStream()
-            
-        def add_sink(self, sink):
-            print("Mock sink added")
-            
-    class MockWindowedStream:
-        def reduce(self, func):
-            return MockDataStream()
-            
-    class MockKafkaSource:
-        @staticmethod
-        def builder():
-            return MockKafkaSourceBuilder()
-            
-    class MockKafkaSourceBuilder:
-        def set_bootstrap_servers(self, servers):
-            return self
-            
-        def set_topics(self, topics):
-            return self
-            
-        def set_group_id(self, group_id):
-            return self
-            
-        def set_value_only_deserializer(self, deserializer):
-            return self
-            
-        def build(self):
-            return MockKafkaSource()
-            
-    class MockKafkaSink:
-        @staticmethod
-        def builder():
-            return MockKafkaSinkBuilder()
-            
-    class MockKafkaSinkBuilder:
-        def set_bootstrap_servers(self, servers):
-            return self
-            
-        def set_record_serializer(self, serializer):
-            return self
-            
-        def set_delivery_guarantee(self, guarantee):
-            return self
-            
-        def build(self):
-            return MockKafkaSink()
-            
-    class MockSimpleStringSchema:
-        pass
+    def __init__(self):
+        self.jobmanager_host = os.getenv("FLINK_JOBMANAGER_HOST", "localhost")
+        self.jobmanager_port = os.getenv("FLINK_JOBMANAGER_PORT", "8081")
+        self.kafka_broker = os.getenv("KAFKA_BROKER", "localhost:9092")
+        self.flink_rest_url = f"http://{self.jobmanager_host}:{self.jobmanager_port}"
         
-    class MockTime:
-        @staticmethod
-        def minutes(minutes):
-            return minutes
+    def submit_job(self):
+        """Submit a simple Flink job via REST API"""
+        try:
+            # Create a simple Flink job JAR (we'll use a pre-built one or create a minimal one)
+            # For now, let's create a simple job that reads from Kafka and writes to Kafka
             
-    class MockTumblingProcessingTimeWindows:
-        @staticmethod
-        def of(time):
-            return MockTumblingProcessingTimeWindows()
+            job_config = {
+                "entryClass": "org.apache.flink.streaming.examples.kafka.KafkaStreamingJob",
+                "programArgs": f"--bootstrap-server {self.kafka_broker} --input-topic logs --output-topic results",
+                "parallelism": 1
+            }
             
-    # Use mock classes
-    StreamExecutionEnvironment = MockStreamExecutionEnvironment
-    KafkaSource = MockKafkaSource
-    KafkaSink = MockKafkaSink
-    SimpleStringSchema = MockSimpleStringSchema
-    Time = MockTime
-    TumblingProcessingTimeWindows = MockTumblingProcessingTimeWindows
+            # Submit job via REST API
+            response = requests.post(
+                f"{self.flink_rest_url}/jars/upload",
+                files={"jarfile": ("flink-kafka-job.jar", open("flink-kafka-job.jar", "rb"))}
+            )
+            
+            if response.status_code == 200:
+                jar_id = response.json()["filename"]
+                print(f"JAR uploaded successfully: {jar_id}")
+                
+                # Submit the job
+                job_response = requests.post(
+                    f"{self.flink_rest_url}/jars/{jar_id}/run",
+                    json=job_config
+                )
+                
+                if job_response.status_code == 200:
+                    job_id = job_response.json()["jobid"]
+                    print(f"Job submitted successfully: {job_id}")
+                    return job_id
+                else:
+                    print(f"Failed to submit job: {job_response.text}")
+                    return None
+            else:
+                print(f"Failed to upload JAR: {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"Error submitting Flink job: {e}")
+            return None
+
+class MockFlinkJob:
+    """Mock Flink job that simulates the processing"""
     
-else:
-    # Import real PyFlink classes
-    try:
-        from pyflink.datastream import StreamExecutionEnvironment
-        from pyflink.datastream.connectors.kafka import KafkaSource, KafkaSink
-        from pyflink.common.serialization import SimpleStringSchema
-        from pyflink.common import Time
-        from pyflink.datastream.window import TumblingProcessingTimeWindows
-    except ImportError as e:
-        print(f"PyFlink import error: {e}")
-        print("Using mock implementation for development.")
-        # Use the same mock classes as above
-        # Mock classes are already defined above
+    def __init__(self):
+        self.broker = os.getenv("KAFKA_BROKER", "localhost:9092")
+        self.aggregations = {}
+        self.last_emit_time = time.time()
+        
+        # Initialize Kafka consumer and producer
+        self.consumer = KafkaConsumer(
+            "logs",
+            bootstrap_servers=[self.broker],
+            value_deserializer=lambda m: json.loads(m.decode()),
+            auto_offset_reset="earliest",
+            enable_auto_commit=True,
+            group_id="flink-group"
+        )
+        
+        self.producer = KafkaProducer(
+            bootstrap_servers=[self.broker],
+            value_serializer=lambda v: json.dumps(v).encode()
+        )
+        
+        print(f"Mock Flink Job initialized with broker: {self.broker}")
+    
+    def process_event(self, event):
+        """Process a single event and update aggregations"""
+        try:
+            campaign = event.get("campaign_id", "unknown")
+            channel = event.get("channel", "unknown")
+            event_type = event.get("event", "unknown")
+            cost = event.get("cost", 0.0)
+            
+            key = f"{campaign}_{channel}"
+            
+            if key not in self.aggregations:
+                self.aggregations[key] = {
+                    "clicks": 0,
+                    "conversions": 0,
+                    "spend": 0.0
+                }
+            
+            # Update aggregations based on event type
+            if event_type == "click":
+                self.aggregations[key]["clicks"] += 1
+                self.aggregations[key]["spend"] += cost
+            elif event_type == "conversion":
+                self.aggregations[key]["conversions"] += 1
+                self.aggregations[key]["spend"] += cost
+            
+            print(f"Processed event: {event_type} for {campaign}")
+            
+        except Exception as e:
+            print(f"Error processing event: {e}")
+    
+    def emit_results(self):
+        """Emit aggregated results every 60 seconds"""
+        while True:
+            try:
+                current_time = time.time()
+                if current_time - self.last_emit_time >= 60:  # 60 seconds
+                    if self.aggregations:
+                        for key, metrics in self.aggregations.items():
+                            campaign, channel = key.split("_", 1)
+                            
+                            # Calculate derived metrics
+                            cpc = metrics["spend"] / metrics["clicks"] if metrics["clicks"] > 0 else 0
+                            cpa = metrics["spend"] / metrics["conversions"] if metrics["conversions"] > 0 else 0
+                            
+                            result = {
+                                "campaign": campaign,
+                                "channel": channel,
+                                "window": "1m",
+                                "clicks": metrics["clicks"],
+                                "conversions": metrics["conversions"],
+                                "spend": round(metrics["spend"], 2),
+                                "CPC": round(cpc, 4),
+                                "CPA": round(cpa, 2)
+                            }
+                            
+                            self.producer.send("results", result)
+                            print(f"Emitted result: {result}")
+                        
+                        # Reset aggregations after emitting
+                        self.aggregations = {}
+                        self.last_emit_time = current_time
+                
+                time.sleep(10)  # Check every 10 seconds
+                
+            except Exception as e:
+                print(f"Error in emit_results: {e}")
+                time.sleep(10)
+    
+    def run(self):
+        """Main processing loop"""
+        print("Starting Mock Flink job...")
+        
+        # Start background thread for emitting results
+        emit_thread = threading.Thread(target=self.emit_results, daemon=True)
+        emit_thread.start()
+        
+        try:
+            for message in self.consumer:
+                self.process_event(message.value)
+        except KeyboardInterrupt:
+            print("Shutting down Mock Flink job...")
+        finally:
+            self.consumer.close()
+            self.producer.close()
 
-env = StreamExecutionEnvironment.get_execution_environment()
-env.set_parallelism(1)
-
-consumer = KafkaSource.builder() \
-    .set_bootstrap_servers("redpanda:9092") \
-    .set_topics("logs") \
-    .set_group_id("flink") \
-    .set_value_only_deserializer(SimpleStringSchema()) \
-    .build()
-
-producer = KafkaSink.builder() \
-    .set_bootstrap_servers("redpanda:9092") \
-    .set_record_serializer(SimpleStringSchema()) \
-    .set_delivery_guarantee("at-least-once") \
-    .build()
-
-def parse(s: str):
-    e = json.loads(s)
-    key = (e["campaign_id"], e["channel"])
-    clicks = 1 if e["event"] == "click" else 0
-    convs = 1 if e["event"] == "conversion" else 0
-    spend = float(e["cost"])
-    return key, clicks, convs, spend
-
-def reduce(a, b):
-    # (key, clicks, convs, spend)
-    return a[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]
-
-def to_json(t):
-    (campaign, channel), clicks, convs, spend = t[0], t[1], t[2], t[3]
-    cpc = spend / max(clicks, 1)
-    cpa = spend / max(convs, 1)
-    out = {"campaign": campaign, "channel": channel, "window": "1m",
-           "clicks": clicks, "conversions": convs,
-           "spend": round(spend, 2), "CPC": round(cpc, 4), "CPA": round(cpa, 4)}
-    return json.dumps(out)
-
-stream = (env.add_source(consumer)
-            .map(parse)
-            .key_by(lambda x: x[0])
-            .window(TumblingProcessingTimeWindows.of(Time.minutes(1)))
-            .reduce(reduce)
-            .map(to_json))
-stream.add_sink(producer)
+def main():
+    """Main entry point"""
+    print("Starting Flink job...")
+    
+    # Try to submit a real Flink job first
+    submitter = FlinkJobSubmitter()
+    job_id = submitter.submit_job()
+    
+    if job_id:
+        print(f"Real Flink job submitted with ID: {job_id}")
+        # Monitor the job
+        while True:
+            time.sleep(10)
+    else:
+        print("Falling back to mock Flink job...")
+        # Fall back to mock implementation
+        job = MockFlinkJob()
+        job.run()
 
 if __name__ == "__main__":
-    env.execute("marketing-1m-aggregates")
+    main()
